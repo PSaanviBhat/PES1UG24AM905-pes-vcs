@@ -27,7 +27,6 @@
 int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out);
 
 
-
 // ─── PROVIDED ────────────────────────────────────────────────────────────────
 
 // Find an index entry by path (linear scan).
@@ -148,9 +147,7 @@ int index_load(Index *index) {
     index->count = 0;
 
     FILE *f = fopen(INDEX_FILE, "r");
-    if (!f) {
-        return 0;
-    }
+    if (!f) return 0;
 
     while (index->count < MAX_INDEX_ENTRIES) {
         unsigned int mode;
@@ -163,15 +160,13 @@ int index_load(Index *index) {
                         &mode, hex, &mtime, &size, path);
 
         if (rc == EOF) break;
-
         if (rc != 5) {
             fclose(f);
             return -1;
         }
 
-        IndexEntry *entry = &index->entries[index->count++];
+        IndexEntry *entry = &index->entries[index->count];
         entry->mode = mode;
-
         if (hex_to_hash(hex, &entry->hash) != 0) {
             fclose(f);
             return -1;
@@ -180,6 +175,8 @@ int index_load(Index *index) {
         entry->mtime_sec = (uint64_t)mtime;
         entry->size = size;
         snprintf(entry->path, sizeof(entry->path), "%s", path);
+
+        index->count++;
     }
 
     fclose(f);
@@ -198,40 +195,43 @@ int index_load(Index *index) {
 //
 // Returns 0 on success, -1 on error.
 int index_save(const Index *index) {
-    Index sorted = *index;
-    qsort(sorted.entries, sorted.count, sizeof(IndexEntry), compare_index_entries);
+    Index *sorted = malloc(sizeof(Index));
+    if (!sorted) return -1;
 
-    const char *tmp_path = ".pes/index.tmp";
-    FILE *f = fopen(tmp_path, "w");
-    if (!f) return -1;
+    *sorted = *index;
+    qsort(sorted->entries, sorted->count, sizeof(IndexEntry), compare_index_entries);
 
-    for (int i = 0; i < sorted.count; i++) {
+    FILE *f = fopen(".pes/index.tmp", "w");
+    if (!f) {
+        free(sorted);
+        return -1;
+    }
+
+    for (int i = 0; i < sorted->count; i++) {
         char hex[HASH_HEX_SIZE + 1];
-        hash_to_hex(&sorted.entries[i].hash, hex);
+        hash_to_hex(&sorted->entries[i].hash, hex);
 
         fprintf(f, "%o %s %llu %u %s\n",
-                sorted.entries[i].mode,
+                sorted->entries[i].mode,
                 hex,
-                (unsigned long long)sorted.entries[i].mtime_sec,
-                sorted.entries[i].size,
-                sorted.entries[i].path);
+                (unsigned long long)sorted->entries[i].mtime_sec,
+                sorted->entries[i].size,
+                sorted->entries[i].path);
     }
 
     fflush(f);
     fsync(fileno(f));
 
-    if (fclose(f) != 0) return -1;
-
-    if (rename(tmp_path, INDEX_FILE) != 0) return -1;
-
-    int dir_fd = open(PES_DIR, O_RDONLY);
-    if (dir_fd >= 0) {
-        fsync(dir_fd);
-        close(dir_fd);
+    if (fclose(f) != 0) {
+        free(sorted);
+        return -1;
     }
 
-    return 0;
+    free(sorted);
+
+    return rename(".pes/index.tmp", INDEX_FILE);
 }
+
 
 // Stage a file for the next commit.
 //
@@ -251,31 +251,33 @@ int index_add(Index *index, const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f) return -1;
 
-    uint8_t *data = malloc(st.st_size ? (size_t)st.st_size : 1);
+    uint8_t *data = malloc((size_t)st.st_size + 1);
     if (!data) {
         fclose(f);
         return -1;
     }
 
-    if (fread(data, 1, (size_t)st.st_size, f) != (size_t)st.st_size) {
-        fclose(f);
+    size_t nread = fread(data, 1, (size_t)st.st_size, f);
+    fclose(f);
+
+    if (nread != (size_t)st.st_size) {
         free(data);
         return -1;
     }
-
-    fclose(f);
 
     ObjectID blob_id;
     if (object_write(OBJ_BLOB, data, (size_t)st.st_size, &blob_id) != 0) {
         free(data);
         return -1;
     }
+
     free(data);
 
     IndexEntry *entry = index_find(index, path);
     if (!entry) {
         if (index->count >= MAX_INDEX_ENTRIES) return -1;
-        entry = &index->entries[index->count++];
+        entry = &index->entries[index->count];
+        index->count++;
     }
 
     entry->mode = (st.st_mode & S_IXUSR) ? 0100755 : 0100644;
@@ -286,3 +288,4 @@ int index_add(Index *index, const char *path) {
 
     return index_save(index);
 }
+
