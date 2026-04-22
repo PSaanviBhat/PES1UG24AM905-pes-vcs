@@ -121,6 +121,10 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
         free(full);
         return 0;
     }
+
+    char hex[HASH_HEX_SIZE + 1];
+    hash_to_hex(id_out, hex);
+
     return 0;
 }
 
