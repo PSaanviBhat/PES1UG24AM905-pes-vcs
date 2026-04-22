@@ -135,7 +135,46 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
     char tmp_path[520];
     snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", final_path);
 
-    
+    int fd = open(tmp_path, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (fd < 0) {
+        free(full);
+        return -1;
+    }
+
+    size_t written_total = 0;
+    while (written_total < total_len) {
+        ssize_t written = write(fd, full + written_total, total_len - written_total);
+        if (written <= 0) {
+            close(fd);
+            free(full);
+            return -1;
+        }
+        written_total += (size_t)written;
+    }
+
+    if (fsync(fd) != 0) {
+        close(fd);
+        free(full);
+        return -1;
+    }
+
+    if (close(fd) != 0) {
+        free(full);
+        return -1;
+    }
+
+    if (rename(tmp_path, final_path) != 0) {
+        free(full);
+        return -1;
+    }
+
+    int dir_fd = open(shard_dir, O_RDONLY);
+    if (dir_fd >= 0) {
+        fsync(dir_fd);
+        close(dir_fd);
+    }
+
+    free(full);
     return 0;
 }
 
@@ -163,7 +202,40 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
 // The caller is responsible for calling free(*data_out).
 // Returns 0 on success, -1 on error (file not found, corrupt, etc.).
 int object_read(const ObjectID *id, ObjectType *type_out, void **data_out, size_t *len_out) {
-    // TODO: Implement
-    (void)id; (void)type_out; (void)data_out; (void)len_out;
-    return -1;
+    char path[512];
+    object_path(id, path, sizeof(path));
+
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return -1;
+    }
+
+    long file_len_long = ftell(f);
+    if (file_len_long < 0) {
+        fclose(f);
+        return -1;
+    }
+
+    rewind(f);
+
+    size_t file_len = (size_t)file_len_long;
+    uint8_t *full = malloc(file_len ? file_len : 1);
+    if (!full) {
+        fclose(f);
+        return -1;
+    }
+
+    if (fread(full, 1, file_len, f) != file_len) {
+        fclose(f);
+        free(full);
+        return -1;
+    }
+    fclose(f);
+
+  
+    return 0;
 }
+
