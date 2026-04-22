@@ -164,7 +164,28 @@ static int write_tree_level(const Index *index, const char *prefix, ObjectID *id
             entry->mode = index->entries[i].mode;
             entry->hash = index->entries[i].hash;
             snprintf(entry->name, sizeof(entry->name), "%s", rest);
-        } 
+        } else {
+            size_t name_len = (size_t)(slash - rest);
+            if (name_len == 0 || name_len >= 256) return -1;
+
+            char dirname[256];
+            memcpy(dirname, rest, name_len);
+            dirname[name_len] = '\0';
+
+            if (tree_has_entry(&tree, dirname)) continue;
+            if (tree.count >= MAX_TREE_ENTRIES) return -1;
+
+            char child_prefix[512];
+            snprintf(child_prefix, sizeof(child_prefix), "%s%s/", prefix, dirname);
+
+            ObjectID child_id;
+            if (write_tree_level(index, child_prefix, &child_id) != 0) return -1;
+
+            TreeEntry *entry = &tree.entries[tree.count++];
+            entry->mode = MODE_DIR;
+            entry->hash = child_id;
+            snprintf(entry->name, sizeof(entry->name), "%s", dirname);
+        }
     }
 
     void *data;
