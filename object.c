@@ -93,11 +93,84 @@ int object_exists(const ObjectID *id) {
 
 //
 // Returns 0 on success, -1 on error.
+
 int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out) {
-    // TODO: Implement
-    (void)type; (void)data; (void)len; (void)id_out;
-    return -1;
+    const char *type_str = NULL;
+
+    if (type == OBJ_BLOB) type_str = "blob";
+    else if (type == OBJ_TREE) type_str = "tree";
+    else if (type == OBJ_COMMIT) type_str = "commit";
+    else return -1;
+
+    char header[64];
+    int header_len = snprintf(header, sizeof(header), "%s %zu", type_str, len);
+    if (header_len < 0 || header_len >= (int)sizeof(header)) return -1;
+
+    size_t total_len = (size_t)header_len + 1 + len;
+    uint8_t *full = malloc(total_len);
+    if (!full) return -1;
+
+    memcpy(full, header, (size_t)header_len);
+    full[header_len] = '\0';
+
+    if (len > 0 && data != NULL) {
+        memcpy(full + header_len + 1, data, len);
+    }
+
+    compute_hash(full, total_len, id_out);
+
+    char hex[HASH_HEX_SIZE + 1];
+    hash_to_hex(id_out, hex);
+
+    char dir_path[512];
+    snprintf(dir_path, sizeof(dir_path), "%s/%.2s", OBJECTS_DIR, hex);
+
+    if (mkdir(dir_path, 0755) != 0 && access(dir_path, F_OK) != 0) {
+        free(full);
+        return -1;
+    }
+
+    char final_path[512];
+    object_path(id_out, final_path, sizeof(final_path));
+
+    if (access(final_path, F_OK) == 0) {
+        free(full);
+        return 0;
+    }
+
+    char tmp_path[600];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", final_path);
+
+    int fd = open(tmp_path, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (fd < 0) {
+        free(full);
+        return -1;
+    }
+
+    size_t done = 0;
+    while (done < total_len) {
+        ssize_t n = write(fd, full + done, total_len - done);
+        if (n <= 0) {
+            close(fd);
+            free(full);
+            return -1;
+        }
+        done += (size_t)n;
+    }
+
+    fsync(fd);
+    close(fd);
+
+    if (rename(tmp_path, final_path) != 0) {
+        free(full);
+        return -1;
+    }
+
+    free(full);
+    return 0;
 }
+
+
 
 // Read an object from the store.
 //
@@ -122,7 +195,98 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
 // The caller is responsible for calling free(*data_out).
 // Returns 0 on success, -1 on error (file not found, corrupt, etc.).
 int object_read(const ObjectID *id, ObjectType *type_out, void **data_out, size_t *len_out) {
-    // TODO: Implement
-    (void)id; (void)type_out; (void)data_out; (void)len_out;
-    return -1;
+    char path[512];
+    object_path(id, path, sizeof(path));
+
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return -1;
+    }
+
+    long file_len_long = ftell(f);
+    if (file_len_long < 0) {
+        fclose(f);
+        return -1;
+    }
+
+    rewind(f);
+
+    size_t file_len = (size_t)file_len_long;
+    uint8_t *full = malloc(file_len ? file_len : 1);
+    if (!full) {
+        fclose(f);
+        return -1;
+    }
+
+    if (fread(full, 1, file_len, f) != file_len) {
+        fclose(f);
+        free(full);
+        return -1;
+    }
+    fclose(f);
+
+    ObjectID actual;
+    compute_hash(full, file_len, &actual);
+    if (memcmp(actual.hash, id->hash, HASH_SIZE) != 0) {
+        free(full);
+        return -1;
+    }
+
+    uint8_t *nul = memchr(full, '\0', file_len);
+    if (!nul) {
+        free(full);
+        return -1;
+    }
+
+    size_t header_len = (size_t)(nul - full);
+    char header[128];
+    if (header_len >= sizeof(header)) {
+        free(full);
+        return -1;
+    }
+
+    memcpy(header, full, header_len);
+    header[header_len] = '\0';
+
+    char type_str[16];
+    size_t declared_len;
+    if (sscanf(header, "%15s %zu", type_str, &declared_len) != 2) {
+        free(full);
+        return -1;
+    }
+
+    if (strcmp(type_str, "blob") == 0) {
+        *type_out = OBJ_BLOB;
+    } else if (strcmp(type_str, "tree") == 0) {
+        *type_out = OBJ_TREE;
+    } else if (strcmp(type_str, "commit") == 0) {
+        *type_out = OBJ_COMMIT;
+    } else {
+        free(full);
+        return -1;
+    }
+
+    size_t data_offset = header_len + 1;
+    if (data_offset > file_len || declared_len != file_len - data_offset) {
+        free(full);
+        return -1;
+    }
+
+    void *data = malloc(declared_len ? declared_len : 1);
+    if (!data) {
+        free(full);
+        return -1;
+    }
+
+    memcpy(data, full + data_offset, declared_len);
+
+    *data_out = data;
+    *len_out = declared_len;
+
+    free(full);
+    return 0;
 }
+
