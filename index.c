@@ -243,5 +243,28 @@ int index_save(const Index *index) {
 //
 // Returns 0 on success, -1 on error.
 
+int index_add(Index *index, const char *path) {
+    struct stat st;
+    if (stat(path, &st) != 0) return -1;
+    if (!S_ISREG(st.st_mode)) return -1;
+
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+
+    uint8_t *data = malloc(st.st_size ? (size_t)st.st_size : 1);
+    if (!data) {
+        fclose(f);
+        return -1;
+    }
+
+    if (fread(data, 1, (size_t)st.st_size, f) != (size_t)st.st_size) {
+        fclose(f);
+        free(data);
+        return -1;
+    }
+
+    fclose(f);
 
     
+    return index_save(index);
+}
