@@ -4,6 +4,9 @@
 
 **Platform:** Ubuntu 22.04
 
+### Brief Overview
+This project implements a small local version control system similar to Git. It stores file contents as hashed objects, stages files through an index, builds tree objects to represent directory snapshots, and creates commit objects to track project history. The system supports basic commands like init, add, status, commit, and log, while teaching how real version control tools use the filesystem internally.
+
 ---
 
 # PES-VCS Lab Report
