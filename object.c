@@ -235,7 +235,65 @@ int object_read(const ObjectID *id, ObjectType *type_out, void **data_out, size_
     }
     fclose(f);
 
-  
+    ObjectID actual;
+    compute_hash(full, file_len, &actual);
+    if (memcmp(actual.hash, id->hash, HASH_SIZE) != 0) {
+        free(full);
+        return -1;
+    }
+
+    uint8_t *nul = memchr(full, '\0', file_len);
+    if (!nul) {
+        free(full);
+        return -1;
+    }
+
+    size_t header_len = (size_t)(nul - full);
+    char header[128];
+    if (header_len >= sizeof(header)) {
+        free(full);
+        return -1;
+    }
+
+    memcpy(header, full, header_len);
+    header[header_len] = '\0';
+
+    char type_str[16];
+    size_t declared_len;
+    if (sscanf(header, "%15s %zu", type_str, &declared_len) != 2) {
+        free(full);
+        return -1;
+    }
+
+    if (strcmp(type_str, "blob") == 0) {
+        *type_out = OBJ_BLOB;
+    } else if (strcmp(type_str, "tree") == 0) {
+        *type_out = OBJ_TREE;
+    } else if (strcmp(type_str, "commit") == 0) {
+        *type_out = OBJ_COMMIT;
+    } else {
+        free(full);
+        return -1;
+    }
+
+    size_t data_offset = header_len + 1;
+    if (data_offset > file_len || declared_len != file_len - data_offset) {
+        free(full);
+        return -1;
+    }
+
+    void *data = malloc(declared_len ? declared_len : 1);
+    if (!data) {
+        free(full);
+        return -1;
+    }
+
+    memcpy(data, full + data_offset, declared_len);
+
+    *data_out = data;
+    *len_out = declared_len;
+
+    free(full);
     return 0;
 }
 
